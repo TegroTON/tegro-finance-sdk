@@ -247,7 +247,7 @@ The suite covers amount math (round-trips, truncation rejection, unsafe-integer 
 
 - [Tegro Finance docs](https://docs.tegro.finance) — concepts, contracts, fees, API reference.
 - [TON Connect](https://docs.ton.org/develop/dapps/ton-connect/overview) — the wallet-authorization protocol used to sign.
-- [`@tegroton/tegro-money`](https://www.npmjs.com/package/@tegroton/tegro-money) — the sibling SDK for Tegro Money fiat payments.
+- [TON developer docs](https://docs.ton.org) — The Open Network platform reference.
 
 ## Security
 
@@ -261,11 +261,9 @@ PRs welcome — the SDK is intentionally minimal. See [CONTRIBUTING.md](CONTRIBU
 
 Versioned by [Semantic Versioning](https://semver.org/). See [CHANGELOG.md](CHANGELOG.md). Releases are tagged `v<MAJOR>.<MINOR>.<PATCH>` and trigger an automatic npm publish.
 
-## 🌐 Tegro Ecosystem
+## Links
 
-Part of the open-source **Tegro** DeFi & Web3 ecosystem on TON:
-
-- 🔁 **DEX (Tegro Finance)** — https://tegro.finance · [Docs](https://docs.tegro.finance)
-- 💳 **Payments (Tegro Money)** — https://tegro.money · [SDK](https://www.npmjs.com/package/@tegroton/tegro-money)
+- 🔁 **Tegro Finance DEX** — https://tegro.finance
+- 📖 **Docs** — https://docs.tegro.finance
 - 💬 **Community** — https://t.me/TegroFinance
-- 🏠 **All open-source repos** — https://github.com/TegroTON
+- 🐙 **Source** — https://github.com/TegroTON/tegro-finance-sdk
