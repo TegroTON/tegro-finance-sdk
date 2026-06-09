@@ -1,0 +1,66 @@
+name: Bug report
+description: Something is broken or behaves differently from the docs.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        **Security issues do not go here.** Use [private vulnerability reporting](https://github.com/TegroTON/tegro-finance-sdk/security/advisories/new) instead — see SECURITY.md.
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: From your `package.json` or `npm ls @tegroton/tegro-finance`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js / environment
+      description: Output of `node --version`, or the browser/bundler if frontend.
+      placeholder: "v22.11.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you observe instead?
+      placeholder: |
+        I called `simulateSwap({ ... })` and expected …, but got …
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        A short snippet that reproduces the problem. Strip secrets and wallet addresses you don't want public.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Stack traces, console output, HTTP response bodies. Redact anything sensitive.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: This is not a security issue (if it is, I will use private vulnerability reporting).
+          required: true
