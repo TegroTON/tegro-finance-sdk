@@ -4,3 +4,9 @@ dist
 .env.local
 *.log
 .DS_Store
+
+# verification scratch — the verified hashes are committed in
+# tests/contracts.cells.test.ts, so these don't need to be tracked.
+.oracle-venv/
+.oracle.py
+.oracle.ts

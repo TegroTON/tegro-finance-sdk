@@ -9,11 +9,17 @@
 [![TypeScript](https://img.shields.io/badge/types-included-3178c6?logo=typescript&logoColor=white)](src/index.ts)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-fa6673)](https://www.conventionalcommits.org)
 
-Production-ready TypeScript SDK for the **[Tegro Finance](https://tegro.finance)** DEX — an AMM on **The Open Network (TON)**. Typed read client + swap/liquidity quote & build helpers + a TON Connect message adapter. Zero runtime dependencies.
+Production-ready TypeScript SDK for the **[Tegro Finance](https://tegro.finance)** DEX — an AMM on **The Open Network (TON)**. It ships **two integration modes**:
+
+- **API mode** — a thin, typed HTTP client over the public Tegro Finance API (read pools/assets, quote, and have the backend prepare transactions).
+- **On-chain mode** — build swap & liquidity transactions **entirely client-side** with `TegroFinanceRouter`, with **no dependency on our backend** (the STON.fi-grade path). Every message body is verified byte-for-byte against the production contracts.
+
+Surface at a glance:
 
 - **Read** — `getPools()`, `getAssets()`, `getTokenData()`, `getPoolsForWallet()`.
 - **Quote** — `simulateSwap()`, `simulateReverseSwap()`, `simulateProvideLiquidity()`.
-- **Build** — `buildSwap()`, `buildProvideLiquidity()`, `buildRemoveLiquidity()`, `buildCreatePool()` → a ready-to-sign TON Connect message list.
+- **Build (API)** — `buildSwap()`, `buildProvideLiquidity()`, `buildRemoveLiquidity()`, `buildCreatePool()` → a ready-to-sign TON Connect message list.
+- **Build (on-chain)** — `TegroFinanceRouter.getSwapTxParams()`, `getProvideLiquidityTxParams()`, `getRemoveLiquidityTxParams()`, `getCreatePoolTxParams()`.
 - **Helpers** — `toUnits` / `fromUnits` (BigInt-exact), `applySlippage`, `toTonConnectMessages`.
 
 > **Non-custodial by design.** Every state change is authorized by the user's wallet via TON Connect. The backend returns a prepared message payload; this SDK maps it to the wallet's `sendTransaction` shape and passes the BOC through untouched. **The SDK never holds, sees, or transmits a private key.**
@@ -107,6 +113,37 @@ const tx = await client.buildSwap({
 await tonConnectUI.sendTransaction(toTonConnectMessages(tx));
 ```
 
+### On-chain mode — build without our backend
+
+If you don't want a dependency on the Tegro API for transaction building, use
+`TegroFinanceRouter`. It assembles the **exact same** message the backend would
+(verified byte-for-byte against the production contracts) using only `@ton/core`
+and a jetton-wallet resolver over any TON RPC:
+
+```ts
+import { TegroFinanceRouter, tonApiResolver, cachingResolver, applySlippage } from "@tegroton/tegro-finance";
+
+const router = new TegroFinanceRouter({
+  routerAddress: "EQAbKJUWn1oWVPkvp78vkmt0E7gA929rIbP33XAISzWTelct", // read from /api/v1/pools
+  proxyTonAddress: "EQDzeU94K3aDdAfqB-NLcaCfTwUMzbpFmlrTpwM_xpQRrtgs", // the router's pTON wallet master
+  resolver: cachingResolver(tonApiResolver()), // or your own @ton/ton-based resolver
+});
+
+const tx = await router.getSwapTxParams({
+  userWalletAddress: userAddress,
+  offerJettonAddress: TON_NATIVE_ADDRESS,
+  offerAmount: toUnits("1", 9),
+  askJettonAddress: tgrAddress,
+  minAskAmount: applySlippage(expectedOut, 0.01),
+});
+
+await tonConnectUI.sendTransaction(tx); // already TON Connect-shaped
+```
+
+`getProvideLiquidityTxParams`, `getCreatePoolTxParams`, `getRemoveLiquidityTxParams`
+and `getUnlockPoolTxParams` work the same way. Resolve `routerAddress` and the
+pool/pTON addresses from `/api/v1/pools` — never hardcode them long-term.
+
 Full runnable examples: [`examples/list-pools.ts`](examples/list-pools.ts), [`examples/quote-and-swap.ts`](examples/quote-and-swap.ts), [`examples/tonconnect-react.tsx`](examples/tonconnect-react.tsx).
 
 ---
@@ -190,6 +227,21 @@ Quote methods throw `TegroFinanceDexError` (with `.code`: `21` pool-not-found, `
 | `buildCreatePool(p)` | `POST /api/v1/dex/liquidity/create` |
 | `buildUnlockPool(p)` | `POST /api/v1/dex/pool/unlock` |
 
+#### On-chain (`new TegroFinanceRouter({ routerAddress, proxyTonAddress, resolver })`)
+
+Builds the same transactions client-side — no backend call for tx construction.
+Each method returns a TON Connect request (`{ validUntil, messages }`).
+
+| Method | Builds |
+|---|---|
+| `getSwapTxParams(p)` | swap (TON↔jetton, jetton↔jetton) |
+| `getProvideLiquidityTxParams(p)` | add liquidity (one message per non-zero side) |
+| `getCreatePoolTxParams(p)` | create a pool (two-sided provide on a new pair) |
+| `getRemoveLiquidityTxParams(p)` | burn LP at the user's LP wallet |
+| `getUnlockPoolTxParams(p)` | admin `update_pool_status` (pool unlock) |
+
+Resolvers: `tonApiResolver(opts?)` (over tonapi.io), `cachingResolver(inner)`, or any object implementing `JettonWalletResolver`. Low-level cell builders (`buildSwapBody`, `buildJettonTransferBody`, `buildPtonTonTransferBody`, `buildProvideLiquidityBody`, `buildBurnBody`, `buildUpdatePoolStatusBody`) and the `OpCodes` / `Gas` constants are exported too.
+
 ### Helpers
 
 ```ts
@@ -218,20 +270,20 @@ npm test          # vitest, network mocked
 npx tsc --noEmit  # type check
 ```
 
-The suite covers amount math (round-trips, truncation rejection, unsafe-integer guards), request shaping, BigInt-on-the-wire serialization, the DEX-error envelope, and the TON Connect mapping.
+The suite (40 tests) covers amount math (round-trips, truncation rejection, unsafe-integer guards), request shaping, BigInt-on-the-wire serialization, the DEX-error envelope, the TON Connect mapping, the on-chain Router routing, and **byte-for-byte cell-hash equality of every on-chain body against the production backend** (`pytoniq_core`).
 
 ## Roadmap / non-goals
 
 ✅ Implemented
 - Read: pools, pairs, assets, token data, wallet positions
 - Quote: swap, reverse swap, provide-liquidity
-- Build: swap, provide / complete / activate, remove, create pool, unlock pool
+- Build (API): swap, provide / complete / activate, remove, create pool, unlock pool
+- **Build (on-chain): client-side swap / provide / remove / create / unlock, verified byte-for-byte against the production contracts**
 - BigInt-exact units + slippage helpers
 - TON Connect message adapter
-- Zero runtime dependencies
+- One runtime dep (`@ton/core`); the HTTP/quote layer is dependency-free
 
 🚧 Not yet (PRs welcome)
-- Staking / liquid-staking endpoints
 - IDO / launchpad endpoints
 - Multi-hop route helper
 - A lossless BigInt response parser
@@ -240,6 +292,7 @@ The suite covers amount math (round-trips, truncation rejection, unsafe-integer 
 - **No key management, no signing** — that's the wallet's job, by design.
 - No database, no order tracking — bring your own.
 - No on-chain indexing — read the API or your own indexer.
+- Staking lives in a separate project, not this SDK.
 
 ---
 

@@ -14,6 +14,40 @@ export type {
   TonConnectTransactionRequest,
 } from "./tonconnect.js";
 
+// On-chain layer: build swap/liquidity transactions client-side, without the
+// Tegro backend (requires @ton/core + a JettonWalletResolver). See ./contracts.
+export {
+  TegroFinanceRouter,
+  tonApiResolver,
+  cachingResolver,
+  JettonWalletResolutionError,
+  OpCodes,
+  Gas,
+  TX_DEADLINE_SECONDS,
+  PREPARED_TRANSACTION_LIFETIME_SECONDS,
+  buildJettonTransferBody,
+  buildPtonTonTransferBody,
+  buildSwapBody,
+  buildProvideLiquidityBody,
+  buildBurnBody,
+  buildUpdatePoolStatusBody,
+} from "./contracts/index.js";
+export type {
+  RouterConfig,
+  SwapTxParams,
+  ProvideLiquidityTxParams,
+  RemoveLiquidityTxParams,
+  UnlockPoolTxParams,
+  JettonWalletResolver,
+  TonApiResolverOptions,
+  JettonTransferBodyParams,
+  PtonTransferBodyParams,
+  SwapBodyParams,
+  ProvideLiquidityBodyParams,
+  BurnBodyParams,
+  UpdatePoolStatusBodyParams,
+} from "./contracts/index.js";
+
 export { TON_NATIVE_ADDRESS, DexErrorCode } from "./types.js";
 export type {
   UnitsInput,
