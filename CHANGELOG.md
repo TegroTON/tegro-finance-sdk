@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-06-09
+
+Security hardening (no API changes).
+
+- Replace three anchored-quantifier regexes (`/\/+$/`, `/0+$/`) with linear
+  string trims in `client.ts`, `contracts/provider.ts`, and `amounts.ts`.
+  Removes a polynomial-backtracking (ReDoS) class flagged by CodeQL; behavior
+  is unchanged. `src/` ships to consumers, so this lands as a patch release.
+- Dev-dependency bumps (vitest/vite/esbuild, GitHub Actions) via Dependabot —
+  dev-only, never part of the published package.
+
 ## 0.2.0 — 2026-06-09
 
 On-chain mode — build transactions client-side, without the Tegro backend.

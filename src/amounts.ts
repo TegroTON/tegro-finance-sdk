@@ -70,8 +70,15 @@ export function fromUnits(units: UnitsInput, decimals: number): string {
   const neg = v < 0n;
   const abs = (neg ? -v : v).toString().padStart(decimals + 1, "0");
   const whole = abs.slice(0, abs.length - decimals) || "0";
-  const frac = decimals === 0 ? "" : abs.slice(abs.length - decimals).replace(/0+$/, "");
+  const frac = decimals === 0 ? "" : trimTrailingZeros(abs.slice(abs.length - decimals));
   return `${neg ? "-" : ""}${whole}${frac ? `.${frac}` : ""}`;
+}
+
+/** Linear trailing-zero trim (no regex — avoids quadratic backtracking). */
+function trimTrailingZeros(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 48 /* '0' */) end--;
+  return s.slice(0, end);
 }
 
 /**

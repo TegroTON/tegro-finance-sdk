@@ -1,6 +1,6 @@
 {
   "name": "@tegroton/tegro-finance",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Minimal, production-ready Tegro Finance DEX integration for TON: typed read client (pools/assets/tokens) + swap & liquidity quote/build helpers + TON Connect message adapter. The wallet signs; the SDK never touches keys.",
   "type": "module",
   "main": "dist/index.js",

@@ -33,6 +33,13 @@ import type {
 const DEFAULT_API_BASE = "https://api.tegro.finance";
 const API_PREFIX = "/api/v1";
 
+/** Linear trailing-slash trim (no regex — avoids quadratic backtracking). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return s.slice(0, end);
+}
+
 export interface TegroFinanceClientOptions {
   /**
    * API origin. Default `https://api.tegro.finance`. The path prefix
@@ -50,7 +57,7 @@ export class TegroFinanceClient {
   private readonly timeoutMs: number;
 
   constructor(opts: TegroFinanceClientOptions = {}) {
-    this.apiBase = (opts.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, "");
+    this.apiBase = stripTrailingSlashes(opts.apiBase ?? DEFAULT_API_BASE);
     this.timeoutMs = opts.timeoutMs ?? 15_000;
     this.fetchImpl = opts.fetch ?? fetch;
   }

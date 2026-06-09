@@ -13,6 +13,13 @@
 
 import { Address } from "@ton/core";
 
+/** Linear trailing-slash trim (no regex — avoids quadratic backtracking). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return s.slice(0, end);
+}
+
 /** Resolves the jetton wallet address for an (owner, minter) pair. */
 export interface JettonWalletResolver {
   /**
@@ -39,7 +46,7 @@ export interface TonApiResolverOptions {
  * service the production backend uses for `get_wallet_address`.
  */
 export function tonApiResolver(opts: TonApiResolverOptions = {}): JettonWalletResolver {
-  const baseUrl = (opts.baseUrl ?? "https://tonapi.io").replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes(opts.baseUrl ?? "https://tonapi.io");
   const f = opts.fetch ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
 
