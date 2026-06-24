@@ -52,10 +52,12 @@ export type {
 export {
   TegroFinanceStakingClient,
   TegroFinanceStakingAuthError,
+  TegroFinanceStakingValidationError,
   stgTonToTon,
   tonToStgTon,
 } from "./staking.js";
 export type {
+  CredentialsMode,
   TegroFinanceStakingClientOptions,
   StakingPool,
   StakingPoolData,

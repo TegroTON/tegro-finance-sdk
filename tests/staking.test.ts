@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   TegroFinanceStakingClient,
   TegroFinanceStakingAuthError,
+  TegroFinanceStakingValidationError,
   stgTonToTon,
   tonToStgTon,
 } from "../src/staking.js";
@@ -59,8 +60,12 @@ describe("TegroFinanceStakingClient read", () => {
   });
 });
 
+// A second valid mainnet address to stand in for a voucher / wrong destination.
+const OTHER = "EQAvDfWFG0oYX19jwNDNBBL1rKNT9XfaGP9HyTb5nb2Eml6y";
+const soon = () => Math.floor(Date.now() / 1000) + 120;
+
 describe("TegroFinanceStakingClient build (auth)", () => {
-  it("buildStake POSTs nanoTON offer_amount, bigint-safe, with cookie + credentials", async () => {
+  it("buildStake POSTs nanoTON offer_amount as an unquoted integer, with cookie + credentials", async () => {
     let captured = "";
     let cookie: string | undefined;
     let credentials: string | undefined;
@@ -71,26 +76,26 @@ describe("TegroFinanceStakingClient build (auth)", () => {
         captured = init.body as string;
         cookie = (init.headers as Record<string, string>)?.Cookie;
         credentials = (init as { credentials?: string }).credentials;
-        return { body: { valid_until: 1700000060, messages: [{ to: MASTER, amount: 5000000000, payload: "te6cc..." }] } };
+        // attaches the staked TON + 0.1 gas, to the master — passes validation.
+        return { body: { valid_until: soon(), messages: [{ to: MASTER, amount: 5_100_000_000, payload: "te6cc..." }] } };
       }),
     });
-    const tx = await c.buildStake({ masterAddress: MASTER, offerAmount: 50_000_000_123_456_789n });
+    const tx = await c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n });
     expect(tx.messages[0].to).toBe(MASTER);
-    // bigint serialized as an UNQUOTED integer, full precision.
-    expect(captured).toContain('"offer_amount":50000000123456789');
-    expect(captured).not.toContain('"50000000123456789"');
+    expect(captured).toContain('"offer_amount":5000000000');
+    expect(captured).not.toContain('"5000000000"');
     expect(cookie).toBe("token=sess-abc");
     expect(credentials).toBe("include");
   });
 
-  it("buildUnstake POSTs shares_amount", async () => {
+  it("buildUnstake POSTs shares_amount; response carries gas only", async () => {
     let captured = "";
     const c = new TegroFinanceStakingClient({
       sessionToken: "s",
       fetch: mockFetch((url, init) => {
         expect(url.endsWith(`/pool/${MASTER}/unstake`)).toBe(true);
         captured = init.body as string;
-        return { body: { valid_until: 1, messages: [] } };
+        return { body: { valid_until: soon(), messages: [{ to: OTHER, amount: 150_000_000, payload: "burn" }] } };
       }),
     });
     await c.buildUnstake({ masterAddress: MASTER, sharesAmount: 1_500_000_000n });
@@ -104,11 +109,11 @@ describe("TegroFinanceStakingClient build (auth)", () => {
       fetch: mockFetch((url, init) => {
         expect(url.endsWith(`/pool/${MASTER}/claim`)).toBe(true);
         captured = init.body as string;
-        return { body: { valid_until: 1, messages: [] } };
+        return { body: { valid_until: soon(), messages: [{ to: OTHER, amount: 100_000_000, payload: "claim" }] } };
       }),
     });
-    await c.buildClaim({ masterAddress: MASTER, voucherAddress: "EQvoucher" });
-    expect(JSON.parse(captured)).toEqual({ voucher_address: "EQvoucher" });
+    await c.buildClaim({ masterAddress: MASTER, voucherAddress: OTHER });
+    expect(JSON.parse(captured)).toEqual({ voucher_address: OTHER });
   });
 
   it("setSessionToken updates the cookie used on later calls", async () => {
@@ -122,6 +127,148 @@ describe("TegroFinanceStakingClient build (auth)", () => {
     c.setSessionToken("fresh");
     await c.getWithdrawals(MASTER);
     expect(cookie).toBe("token=fresh");
+  });
+});
+
+describe("build validation (trust boundary)", () => {
+  const stakeClient = (body: unknown) =>
+    new TegroFinanceStakingClient({ sessionToken: "s", fetch: mockFetch(() => ({ body })) });
+
+  it("rejects a stake whose TON is redirected away from the master", async () => {
+    const c = stakeClient({ valid_until: soon(), messages: [{ to: OTHER, amount: 5_100_000_000, payload: "x" }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects a stake that attaches far more than offered (drain)", async () => {
+    const c = stakeClient({ valid_until: soon(), messages: [{ to: MASTER, amount: 9_000_000_000, payload: "x" }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }), // cap = 5 + 2 = 7 TON
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects a stake that attaches less than offered", async () => {
+    const c = stakeClient({ valid_until: soon(), messages: [{ to: MASTER, amount: 1_000_000_000, payload: "x" }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects an attached amount past 2**53 (precision-corrupted)", async () => {
+    const c = stakeClient({ valid_until: soon(), messages: [{ to: MASTER, amount: 9_007_199_254_740_993, payload: "x" }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects an empty / shapeless response", async () => {
+    const c = stakeClient({ valid_until: soon(), messages: [] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects a far-future valid_until (replay window)", async () => {
+    const c = stakeClient({ valid_until: soon() + 100_000, messages: [{ to: MASTER, amount: 5_100_000_000 }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects an unstake that attaches more than gas", async () => {
+    const c = new TegroFinanceStakingClient({
+      sessionToken: "s",
+      fetch: mockFetch(() => ({ body: { valid_until: soon(), messages: [{ to: OTHER, amount: 3_000_000_000 }] } })),
+    });
+    await expect(
+      c.buildUnstake({ masterAddress: MASTER, sharesAmount: 1_000_000_000n }), // cap = 2 TON gas
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects a stake with a zero-value side message to a foreign address", async () => {
+    const c = stakeClient({
+      valid_until: soon(),
+      messages: [
+        { to: MASTER, amount: 5_100_000_000, payload: "x" },
+        { to: OTHER, amount: 0, payload: "drain" }, // every stake message must be the master
+      ],
+    });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("accepts a stake whose destination is the master in UQ (non-bounceable) form", async () => {
+    const masterUQ = "UQC-DUl20SfQFVH34cky8N76la1K0Uu5UWjel5IEn7mjIuoZ";
+    const c = stakeClient({ valid_until: soon(), messages: [{ to: masterUQ, amount: 5_100_000_000, payload: "x" }] });
+    const tx = await c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n });
+    expect(tx.messages[0].to).toBe(masterUQ);
+  });
+
+  it("rejects a claim whose gas is sent to neither the voucher nor the master", async () => {
+    const VOUCHER = "EQAIBTuglI7b6vWEG5ukfHnwgWzf-ZHmjsbEtS4mJNh5geZW";
+    const c = new TegroFinanceStakingClient({
+      sessionToken: "s",
+      fetch: mockFetch(() => ({ body: { valid_until: soon(), messages: [{ to: OTHER, amount: 100_000_000 }] } })),
+    });
+    await expect(
+      c.buildClaim({ masterAddress: MASTER, voucherAddress: VOUCHER }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+
+  it("rejects a fractional valid_until", async () => {
+    const c = stakeClient({ valid_until: soon() + 0.5, messages: [{ to: MASTER, amount: 5_100_000_000 }] });
+    await expect(
+      c.buildStake({ masterAddress: MASTER, offerAmount: 5_000_000_000n }),
+    ).rejects.toBeInstanceOf(TegroFinanceStakingValidationError);
+  });
+});
+
+describe("input guards", () => {
+  const c = () =>
+    new TegroFinanceStakingClient({ sessionToken: "s", fetch: mockFetch(() => ({ body: {} })) });
+
+  it("buildStake rejects zero / negative offer before any request", async () => {
+    await expect(c().buildStake({ masterAddress: MASTER, offerAmount: 0n })).rejects.toThrow();
+    await expect(c().buildStake({ masterAddress: MASTER, offerAmount: -1n })).rejects.toThrow();
+  });
+
+  it("buildUnstake rejects zero / negative shares", async () => {
+    await expect(c().buildUnstake({ masterAddress: MASTER, sharesAmount: 0n })).rejects.toThrow();
+    await expect(c().buildUnstake({ masterAddress: MASTER, sharesAmount: -5n })).rejects.toThrow();
+  });
+
+  it("buildClaim rejects a malformed voucher address", async () => {
+    await expect(c().buildClaim({ masterAddress: MASTER, voucherAddress: "not-an-address" })).rejects.toThrow();
+  });
+
+  it("constructor refuses to carry a sessionToken over a non-https base (any case)", () => {
+    expect(() => new TegroFinanceStakingClient({ apiBase: "http://tegro.finance", sessionToken: "s" })).toThrow();
+    expect(() => new TegroFinanceStakingClient({ apiBase: "HTTP://tegro.finance", sessionToken: "s" })).toThrow();
+    expect(() => new TegroFinanceStakingClient({ apiBase: "tegro.finance", sessionToken: "s" })).toThrow();
+    // https in any case is fine.
+    expect(() => new TegroFinanceStakingClient({ apiBase: "HTTPS://tegro.finance", sessionToken: "s" })).not.toThrow();
+  });
+
+  it("refuses a sessionToken with header-injection characters", () => {
+    expect(() => new TegroFinanceStakingClient({ sessionToken: "ab;cd" })).toThrow();
+    expect(() => new TegroFinanceStakingClient({ sessionToken: "ab\r\nSet-Cookie: x" })).toThrow();
+    const ok = new TegroFinanceStakingClient({ sessionToken: "good" });
+    expect(() => ok.setSessionToken("bad\nvalue")).toThrow();
+  });
+
+  it("authenticated call with no session and non-include credentials fails without a request", async () => {
+    let called = false;
+    const c2 = new TegroFinanceStakingClient({
+      credentials: "same-origin",
+      fetch: mockFetch(() => {
+        called = true;
+        return { body: [] };
+      }),
+    });
+    await expect(c2.getWithdrawals(MASTER)).rejects.toBeInstanceOf(TegroFinanceStakingAuthError);
+    expect(called).toBe(false);
   });
 });
 
@@ -149,17 +296,22 @@ describe("rate helpers", () => {
   const PRICE = 1_001_005_223n; // 1.001005223 TON per stgTON
 
   it("stgTonToTon applies the appreciating rate (floored, exact)", () => {
-    // 10 stgTON -> 10 * 1.001005223 = 10.01005223 TON
     expect(stgTonToTon(10_000_000_000n, PRICE)).toBe(10_010_052_230n);
   });
 
   it("tonToStgTon inverts the rate (floored, exact)", () => {
-    // 10 TON -> 10 / 1.001005223 ≈ 9.98995... stgTON (10e18 / price, floored)
     expect(tonToStgTon(10_000_000_000n, PRICE)).toBe(9_989_957_864n);
   });
 
-  it("rejects a non-positive price", () => {
+  it("both reject a non-positive price", () => {
     expect(() => tonToStgTon(1n, 0n)).toThrow();
+    expect(() => stgTonToTon(1n, 0n)).toThrow();
+    expect(() => stgTonToTon(1n, -5n)).toThrow();
+  });
+
+  it("both reject negative amounts", () => {
+    expect(() => stgTonToTon(-1n, PRICE)).toThrow();
+    expect(() => tonToStgTon(-1n, PRICE)).toThrow();
   });
 
   it("rate at parity (price = 1e9) is identity", () => {

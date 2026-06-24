@@ -20,9 +20,10 @@
 // The API never holds keys or moves funds — the user's WALLET signs every
 // state change. Source: TegroTON/ton-gram-staking-docs (openapi.yaml, docs/api.md).
 
+import { Address } from "@ton/core";
 import { toBigIntUnits } from "./amounts.js";
 import { TegroFinanceApiError, stringifyWithBigInt } from "./client.js";
-import type { Asset, TransactionData, UnitsInput } from "./types.js";
+import type { Asset, MessageData, TransactionData, UnitsInput } from "./types.js";
 
 /** Fetch credentials mode (DOM-free alias — the SDK targets lib ES2022). */
 export type CredentialsMode = "omit" | "same-origin" | "include";
@@ -31,11 +32,68 @@ const DEFAULT_API_BASE = "https://tegro.finance";
 const API_PREFIX = "/api/v1";
 const STAKING_PREFIX = "/liquid-staking";
 
+/**
+ * Hard ceiling on the *gas* a builder may attach on top of the staked amount,
+ * in nanoTON (2 TON). A compromised/MITM'd API returning a tx that drains far
+ * more than the user asked for is rejected before it can reach the wallet.
+ */
+const MAX_BUILD_GAS = 2_000_000_000n;
+
+/** Reject a far-future `valid_until` (replay window) — 1h past the issue time. */
+const MAX_VALID_UNTIL_AHEAD_SECS = 3600;
+
 /** Linear trailing-slash trim (no regex — avoids quadratic backtracking). */
 function stripTrailingSlashes(s: string): string {
   let end = s.length;
   while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
   return s.slice(0, end);
+}
+
+/** Normalize a {@link UnitsInput} and require it to be strictly positive. */
+function positiveUnits(value: UnitsInput, field: string): bigint {
+  const v = toBigIntUnits(value);
+  if (v <= 0n) throw new RangeError(`${field} must be a positive amount, got ${v}`);
+  return v;
+}
+
+/** Same TON account regardless of bounceable/testnet flag form (EQ vs UQ). */
+function sameAccount(a: string, b: string): boolean {
+  try {
+    return Address.parse(a).equals(Address.parse(b));
+  } catch {
+    return false;
+  }
+}
+
+/** True if `s` parses as a TON address in any friendly/raw form. */
+function isAddress(s: string): boolean {
+  try {
+    Address.parse(s);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guard a session token before it goes into a `Cookie` header. Rejects an
+ * `https`-less origin and any control/delimiter character (`;`, CR, LF, etc.)
+ * that could split the header. Returns the token unchanged when safe.
+ */
+function assertUsableToken(token: string, apiBase: string): void {
+  // Scheme is case-insensitive (`HTTP://` ≡ `http://`); require https explicitly
+  // so a plaintext or scheme-less base can never carry the token.
+  if (!apiBase.toLowerCase().startsWith("https://")) {
+    throw new Error(
+      "tegro_finance_staking: sessionToken requires an https:// apiBase (got " + apiBase + ")",
+    );
+  }
+  for (let i = 0; i < token.length; i++) {
+    const code = token.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f || code === 0x3b /* ; */) {
+      throw new Error("tegro_finance_staking: sessionToken contains an illegal character");
+    }
+  }
 }
 
 // ---- types --------------------------------------------------------------
@@ -144,6 +202,19 @@ export class TegroFinanceStakingAuthError extends Error {
   }
 }
 
+/**
+ * Thrown when a builder's response does not match the request the SDK made —
+ * the last line of defense before a transaction reaches the wallet to sign.
+ * A wrong destination, an attached amount outside the requested bounds, a
+ * non-integer/oversized amount, or a malformed `valid_until` all trip this.
+ */
+export class TegroFinanceStakingValidationError extends Error {
+  constructor(message: string) {
+    super(`tegro_finance_staking_validation_error:${message}`);
+    this.name = "TegroFinanceStakingValidationError";
+  }
+}
+
 export class TegroFinanceStakingClient {
   private readonly apiBase: string;
   private readonly credentials: CredentialsMode;
@@ -157,6 +228,9 @@ export class TegroFinanceStakingClient {
     this.credentials = opts.credentials ?? "include";
     this.timeoutMs = opts.timeoutMs ?? 15_000;
     this.fetchImpl = opts.fetch ?? fetch;
+    // The session token is a bearer-equivalent credential put in a Cookie header
+    // and sent verbatim to `apiBase`. Refuse plaintext transport or an injectable token.
+    if (this.sessionToken) assertUsableToken(this.sessionToken, this.apiBase);
   }
 
   /**
@@ -164,6 +238,7 @@ export class TegroFinanceStakingClient {
    * Pass `null` to forget it. Ignored for browser cookie auth.
    */
   setSessionToken(token: string | null): void {
+    if (token) assertUsableToken(token, this.apiBase);
     this.sessionToken = token ?? undefined;
   }
 
@@ -197,37 +272,136 @@ export class TegroFinanceStakingClient {
   /**
    * Build a stake transaction: sends TON to the master, which mints stgTON to
    * your st-wallet. Feed the result to `toTonConnectMessages()`.
+   *
+   * The response is validated before it is returned: every attached message
+   * must be addressed to `masterAddress`, and the total attached TON must fall
+   * within `[offerAmount, offerAmount + 2 TON gas]`. A backend that tries to
+   * redirect or inflate the transfer is rejected with a
+   * {@link TegroFinanceStakingValidationError} — the wallet never sees it.
    */
-  buildStake(params: BuildStakeParams): Promise<TransactionData> {
-    return this.post<TransactionData>(
+  async buildStake(params: BuildStakeParams): Promise<TransactionData> {
+    const offer = positiveUnits(params.offerAmount, "offerAmount");
+    const tx = await this.post<TransactionData>(
       `/pool/${encodeURIComponent(params.masterAddress)}/stake`,
-      { offer_amount: toBigIntUnits(params.offerAmount) },
+      { offer_amount: offer },
     );
+    return this.validateBuildResponse(tx, {
+      kind: "stake",
+      masterAddress: params.masterAddress,
+      offer,
+      allowedDest: [params.masterAddress],
+    });
   }
 
   /**
    * Build an unstake transaction: burns stgTON via your st-wallet; the master
-   * issues a 72-hour withdrawal voucher (then claim it after it matures).
+   * issues a 72-hour withdrawal voucher (then claim it after it matures). The
+   * burn rides in the message payload, so only gas (≤ 2 TON) may be attached —
+   * a response attaching more is rejected.
+   *
+   * Trust-boundary note: the burn targets the caller's own st-wallet, whose
+   * address the SDK cannot derive here (the backend knows the wallet from the
+   * session). So unstake destination is NOT bound — only the attached gas is
+   * capped. The principal is the stgTON burned via the payload, never native
+   * value, so a compromised backend's worst case is misdirected gas (≤ 2 TON)
+   * plus a payload the wallet still shows for approval. Always review the tx in
+   * the wallet before signing.
    */
-  buildUnstake(params: BuildUnstakeParams): Promise<TransactionData> {
-    return this.post<TransactionData>(
+  async buildUnstake(params: BuildUnstakeParams): Promise<TransactionData> {
+    const shares = positiveUnits(params.sharesAmount, "sharesAmount");
+    const tx = await this.post<TransactionData>(
       `/pool/${encodeURIComponent(params.masterAddress)}/unstake`,
-      { shares_amount: toBigIntUnits(params.sharesAmount) },
+      { shares_amount: shares },
     );
+    return this.validateBuildResponse(tx, { kind: "unstake", masterAddress: params.masterAddress });
   }
 
   /**
    * Build a claim transaction for a matured voucher. The server verifies
    * on-chain that the voucher is yours, matured (72h) and unclaimed first.
+   * Gas-carrying messages must target the requested voucher (or the master),
+   * and only gas (≤ 2 TON) may be attached.
    */
-  buildClaim(params: BuildClaimParams): Promise<TransactionData> {
-    return this.post<TransactionData>(
+  async buildClaim(params: BuildClaimParams): Promise<TransactionData> {
+    if (!params.voucherAddress || !isAddress(params.voucherAddress)) {
+      throw new RangeError(`voucherAddress is not a valid TON address: ${params.voucherAddress}`);
+    }
+    const tx = await this.post<TransactionData>(
       `/pool/${encodeURIComponent(params.masterAddress)}/claim`,
       { voucher_address: params.voucherAddress },
     );
+    return this.validateBuildResponse(tx, {
+      kind: "claim",
+      masterAddress: params.masterAddress,
+      allowedDest: [params.voucherAddress, params.masterAddress],
+    });
   }
 
   // ---- internal --------------------------------------------------------
+
+  /**
+   * Fail-closed check that a builder's response matches the request, BEFORE it
+   * can reach the wallet. The SDK trusts the backend to assemble the payload,
+   * but binds the money-carrying envelope (destination + attached nanoTON) to
+   * what the caller asked for, so a compromised/MITM'd API can neither redirect
+   * the funds nor inflate the amount.
+   */
+  private validateBuildResponse(
+    tx: TransactionData,
+    ctx: {
+      kind: "stake" | "unstake" | "claim";
+      masterAddress: string;
+      offer?: bigint;
+      /** Destinations a money-carrying message may target. Undefined = unbound. */
+      allowedDest?: string[];
+    },
+  ): TransactionData {
+    const bad = (m: string): never => {
+      throw new TegroFinanceStakingValidationError(`${ctx.kind}: ${m}`);
+    };
+
+    if (!tx || typeof tx !== "object" || !Array.isArray(tx.messages) || tx.messages.length === 0) {
+      bad("response has no messages");
+    }
+    if (!Number.isInteger(tx.valid_until) || tx.valid_until <= 0) {
+      bad(`invalid valid_until ${tx.valid_until}`);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (tx.valid_until > now + MAX_VALID_UNTIL_AHEAD_SECS) {
+      bad(`valid_until ${tx.valid_until} is too far in the future`);
+    }
+
+    const inAllowed = (to: string): boolean =>
+      !!ctx.allowedDest && ctx.allowedDest.some((a) => sameAccount(to, a));
+
+    let attached = 0n;
+    for (const m of tx.messages as MessageData[]) {
+      if (!m || typeof m.to !== "string" || !m.to) bad("message missing destination");
+      // Attached amounts are gas-scale integers; a value past 2**53 means the
+      // JSON parse already rounded it — refuse rather than sign a wrong amount.
+      if (!Number.isSafeInteger(m.amount) || m.amount < 0) {
+        bad(`message amount ${m.amount} is not a safe non-negative integer`);
+      }
+      if (ctx.allowedDest) {
+        // stake = a single transfer to the master, so bind EVERY message.
+        // claim = bind only the money-carrying messages (gas to the voucher).
+        const mustBind = ctx.kind === "stake" || m.amount > 0;
+        if (mustBind && !inAllowed(m.to)) {
+          bad(`message to ${m.to} is not an expected destination (${ctx.allowedDest.join(", ")})`);
+        }
+      }
+      attached += BigInt(m.amount);
+    }
+
+    const cap = (ctx.offer ?? 0n) + MAX_BUILD_GAS;
+    if (attached > cap) {
+      bad(`attaches ${attached} nanoTON, above the ${cap} cap`);
+    }
+    if (ctx.kind === "stake" && ctx.offer !== undefined && attached < ctx.offer) {
+      bad(`attaches ${attached} nanoTON, less than the staked ${ctx.offer}`);
+    }
+    return tx;
+  }
 
   private get<T>(path: string, auth = false): Promise<T> {
     return this.request<T>("GET", path, undefined, auth);
@@ -243,6 +417,14 @@ export class TegroFinanceStakingClient {
     body: Record<string, unknown> | undefined,
     auth: boolean,
   ): Promise<T> {
+    // Fail fast (no network) when an authenticated call has no usable session:
+    // server-side callers must set `sessionToken`; browser callers use the
+    // ambient cookie (`credentials: "include"`).
+    if (auth && !this.sessionToken && this.credentials !== "include") {
+      throw new TegroFinanceStakingAuthError(
+        "no session — pass sessionToken (server) or use credentials:'include' (browser)",
+      );
+    }
     const url = `${this.apiBase}${API_PREFIX}${STAKING_PREFIX}${path}`;
     const controller = this.timeoutMs > 0 ? new AbortController() : undefined;
     const timer = controller && setTimeout(() => controller.abort(), this.timeoutMs);
@@ -312,14 +494,32 @@ export class TegroFinanceStakingClient {
 
 const RATE_SCALE = 1_000_000_000n;
 
-/** Estimate the TON you'd get for `stgTonUnits` stgTON at the given pool `price`. */
-export function stgTonToTon(stgTonUnits: UnitsInput, price: UnitsInput): bigint {
-  return (toBigIntUnits(stgTonUnits) * toBigIntUnits(price)) / RATE_SCALE;
+/** Normalize a non-negative amount (rejects negatives so a bad feed can't flip a sign). */
+function nonNegativeUnits(value: UnitsInput, field: string): bigint {
+  const v = toBigIntUnits(value);
+  if (v < 0n) throw new RangeError(`${field} must be non-negative, got ${v}`);
+  return v;
 }
 
-/** Estimate the stgTON minted for `tonUnits` TON at the given pool `price`. */
-export function tonToStgTon(tonUnits: UnitsInput, price: UnitsInput): bigint {
+/** Require a strictly positive pool price (a zero/negative price is corrupt data). */
+function positivePrice(price: UnitsInput): bigint {
   const p = toBigIntUnits(price);
-  if (p <= 0n) throw new RangeError(`pool price must be positive, got ${price}`);
-  return (toBigIntUnits(tonUnits) * RATE_SCALE) / p;
+  if (p <= 0n) throw new RangeError(`pool price must be positive, got ${p}`);
+  return p;
+}
+
+/**
+ * Estimate the TON you'd get for `stgTonUnits` stgTON at the given pool `price`.
+ * Floored (truncates toward zero). Non-negative inputs only.
+ */
+export function stgTonToTon(stgTonUnits: UnitsInput, price: UnitsInput): bigint {
+  return (nonNegativeUnits(stgTonUnits, "stgTonUnits") * positivePrice(price)) / RATE_SCALE;
+}
+
+/**
+ * Estimate the stgTON minted for `tonUnits` TON at the given pool `price`.
+ * Floored (truncates toward zero). Non-negative inputs only.
+ */
+export function tonToStgTon(tonUnits: UnitsInput, price: UnitsInput): bigint {
+  return (nonNegativeUnits(tonUnits, "tonUnits") * RATE_SCALE) / positivePrice(price);
 }
