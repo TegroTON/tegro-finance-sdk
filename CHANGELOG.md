@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — 2026-06-24
+
+Liquid staking (stgTON) — stake/unstake/claim, additive and non-breaking.
+
+- `TegroFinanceStakingClient` — typed client over the liquid-staking HTTP API:
+  - read (open): `getPools()`, `getPoolData(master)`;
+  - build (→ TON Connect message list): `buildStake`, `buildUnstake`, `buildClaim`;
+  - read (auth): `getWithdrawals(master)` (pending vouchers + 72h timers).
+  - Builders reuse the existing `TransactionData` shape and `toTonConnectMessages`.
+- Session handling: builder/withdrawal endpoints are cookie-authenticated. In a
+  browser dApp the cookie travels via `credentials: "include"`; on a server pass
+  `sessionToken` (or `setSessionToken`). A 401/403 surfaces as the new
+  `TegroFinanceStakingAuthError`. Default origin is `https://tegro.finance` (the
+  cookie's scope), not `api.tegro.finance`.
+- Rate helpers `stgTonToTon` / `tonToStgTon` — exact BigInt conversion at a pool's
+  `price`; documented as display estimates (exclude the 0.5% redeem fee and gas).
+- Types verified against the live backend: `StakingPool` carries `in_asset` /
+  `out_asset` / `fees`, and `apy` is a **percent number** (e.g. `16.97`), not a
+  fraction.
+- `examples/staking.ts` (`npm run example:staking`) + `tests/staking.test.ts`.
+
 ## 0.2.1 — 2026-06-09
 
 Security hardening (no API changes).

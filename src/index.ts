@@ -48,6 +48,25 @@ export type {
   UpdatePoolStatusBodyParams,
 } from "./contracts/index.js";
 
+// Liquid staking (stgTON): stake/unstake/claim builders + live-rate reads.
+export {
+  TegroFinanceStakingClient,
+  TegroFinanceStakingAuthError,
+  TegroFinanceStakingValidationError,
+  stgTonToTon,
+  tonToStgTon,
+} from "./staking.js";
+export type {
+  CredentialsMode,
+  TegroFinanceStakingClientOptions,
+  StakingPool,
+  StakingPoolData,
+  StakingWithdrawal,
+  BuildStakeParams,
+  BuildUnstakeParams,
+  BuildClaimParams,
+} from "./staking.js";
+
 export { TON_NATIVE_ADDRESS, DexErrorCode } from "./types.js";
 export type {
   UnitsInput,
