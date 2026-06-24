@@ -1,7 +1,7 @@
 {
   "name": "@tegroton/tegro-finance",
-  "version": "0.2.1",
-  "description": "Minimal, production-ready Tegro Finance DEX integration for TON: typed read client (pools/assets/tokens) + swap & liquidity quote/build helpers + TON Connect message adapter. The wallet signs; the SDK never touches keys.",
+  "version": "0.3.0",
+  "description": "Minimal, production-ready Tegro Finance DEX integration for TON: typed read client (pools/assets/tokens) + swap & liquidity quote/build helpers + liquid staking (stgTON) stake/unstake/claim + TON Connect message adapter. The wallet signs; the SDK never touches keys.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,7 +10,8 @@
     "prepublishOnly": "npm run build && npm test",
     "test": "vitest run",
     "example:pools": "tsx examples/list-pools.ts",
-    "example:swap": "tsx examples/quote-and-swap.ts"
+    "example:swap": "tsx examples/quote-and-swap.ts",
+    "example:staking": "tsx examples/staking.ts"
   },
   "exports": {
     ".": {
@@ -33,6 +34,9 @@
     "amm",
     "swap",
     "liquidity",
+    "staking",
+    "liquid-staking",
+    "stgton",
     "ton-connect",
     "defi",
     "tegroton"

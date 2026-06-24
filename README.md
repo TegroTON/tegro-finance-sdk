@@ -146,6 +146,38 @@ pool/pTON addresses from `/api/v1/pools` — never hardcode them long-term.
 
 Full runnable examples: [`examples/list-pools.ts`](examples/list-pools.ts), [`examples/quote-and-swap.ts`](examples/quote-and-swap.ts), [`examples/tonconnect-react.tsx`](examples/tonconnect-react.tsx).
 
+### Liquid staking — stake TON, get stgTON
+
+Stake TON into the liquid-staking pool and receive **stgTON**, a token whose rate
+appreciates against TON. Exit by unstaking (burns stgTON → a 72-hour withdrawal
+voucher) and claiming once it matures. Same non-custodial model: every state
+change returns a TON Connect message the wallet signs.
+
+```ts
+import { TegroFinanceStakingClient, toTonConnectMessages, toUnits } from "@tegroton/tegro-finance";
+
+const staking = new TegroFinanceStakingClient();
+
+// Read (open, no wallet): pick the active pool and read its live rate.
+const pools = await staking.getPools(); // apy is a PERCENT (16.97 = 16.97%)
+const master = pools.find((p) => p.is_active)!.out_asset.contract_address;
+const { price } = await staking.getPoolData(master); // stgTON→TON rate, 1e9 fixed point
+
+// Stake (auth): in a browser the TON Connect session cookie travels automatically.
+const tx = await staking.buildStake({ masterAddress: master, offerAmount: toUnits("5", 9) });
+await tonConnectUI.sendTransaction(toTonConnectMessages(tx));
+
+// Exit: unstake → wait 72h → claim a matured voucher.
+await staking.buildUnstake({ masterAddress: master, sharesAmount: toUnits("5", 9) });
+const pending = await staking.getWithdrawals(master); // [{ voucher_address, claim_after, claimable }]
+const ready = pending.find((w) => w.claimable);
+if (ready) await staking.buildClaim({ masterAddress: master, voucherAddress: ready.voucher_address });
+```
+
+On a server (no browser cookie) pass the session explicitly:
+`new TegroFinanceStakingClient({ sessionToken: "<token cookie from TON Connect auth>" })`.
+Runnable: [`examples/staking.ts`](examples/staking.ts) (`npm run example:staking`).
+
 ---
 
 ## Core concepts (read this once)
@@ -242,6 +274,31 @@ Each method returns a TON Connect request (`{ validUntil, messages }`).
 
 Resolvers: `tonApiResolver(opts?)` (over tonapi.io), `cachingResolver(inner)`, or any object implementing `JettonWalletResolver`. Low-level cell builders (`buildSwapBody`, `buildJettonTransferBody`, `buildPtonTonTransferBody`, `buildProvideLiquidityBody`, `buildBurnBody`, `buildUpdatePoolStatusBody`) and the `OpCodes` / `Gas` constants are exported too.
 
+### `new TegroFinanceStakingClient(options?)`
+
+Liquid staking (stgTON). Same non-custodial model as the DEX client.
+
+```ts
+type TegroFinanceStakingClientOptions = {
+  apiBase?: string;        // default "https://tegro.finance" — the session cookie's origin
+  sessionToken?: string;   // server-side cookie auth (browser uses credentials:"include")
+  credentials?: "omit" | "same-origin" | "include"; // default "include"
+  fetch?: typeof fetch;
+  timeoutMs?: number;      // default 15000
+};
+```
+
+| Method | Endpoint | Auth | Returns |
+|---|---|---|---|
+| `getPools()` | `GET /api/v1/liquid-staking/pools` | — | `StakingPool[]` (`apy` is a **percent**) |
+| `getPoolData(master)` | `GET …/pool/{master}/data` | — | `StakingPoolData` (`price` = stgTON→TON rate) |
+| `getWithdrawals(master)` | `GET …/pool/{master}/withdrawals` | cookie | `StakingWithdrawal[]` |
+| `buildStake(p)` | `POST …/pool/{master}/stake` | cookie | `TransactionData` |
+| `buildUnstake(p)` | `POST …/pool/{master}/unstake` | cookie | `TransactionData` |
+| `buildClaim(p)` | `POST …/pool/{master}/claim` | cookie | `TransactionData` |
+
+`setSessionToken(token \| null)` updates the cookie after auth. Authenticated calls throw `TegroFinanceStakingAuthError` on 401/403. Rate helpers `stgTonToTon(stgUnits, price)` / `tonToStgTon(tonUnits, price)` convert at a pool's `price` (display estimates — they exclude the 0.5% redeem fee and gas; the contract is authoritative).
+
 ### Helpers
 
 ```ts
@@ -256,6 +313,7 @@ toTonConnectMessages(tx, validForSecs?): { validUntil, messages }
 
 - `TegroFinanceApiError` — transport failure, timeout, or non-2xx HTTP. Carries `.status` and `.raw`.
 - `TegroFinanceDexError` — a simulate endpoint returned `{type:"error", code, message}`. Carries `.code`.
+- `TegroFinanceStakingAuthError` — an authenticated staking endpoint returned 401/403; re-authenticate the wallet (or pass `sessionToken`).
 
 ---
 
