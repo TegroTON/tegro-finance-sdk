@@ -175,8 +175,44 @@ if (ready) await staking.buildClaim({ masterAddress: master, voucherAddress: rea
 ```
 
 On a server (no browser cookie) pass the session explicitly:
-`new TegroFinanceStakingClient({ sessionToken: "<token cookie from TON Connect auth>" })`.
+`new TegroFinanceStakingClient({ sessionToken: "<token from TON Connect auth>" })`.
 Runnable: [`examples/staking.ts`](examples/staking.ts) (`npm run example:staking`).
+
+### Authenticating a wallet (TON Connect) for staking
+
+`buildStake` / `buildUnstake` / `buildClaim` / `getWithdrawals` need a wallet
+session. Open one from a TON Connect `ton_proof`:
+
+```ts
+import { TegroFinanceAuthClient, TegroFinanceStakingClient, tonProofToLoginRequest } from "@tegroton/tegro-finance";
+
+const auth = new TegroFinanceAuthClient();
+
+// 1. Get a challenge and hand it to TON Connect BEFORE the user connects.
+const payload = await auth.getPayload();
+tonConnectUI.setConnectRequestParameters({ state: "ready", value: { tonProof: payload } });
+
+// 2. After the user connects, map the signed proof and log in.
+const { token } = await auth.login(tonProofToLoginRequest(wallet, { affiliateAddress }));
+
+// 3a. Browser, same origin as tegro.finance → the session cookie is set; just use the client.
+const staking = new TegroFinanceStakingClient();
+// 3b. Server-side (or a Mini App on your own domain, proxied through your backend):
+const stakingServer = new TegroFinanceStakingClient({ sessionToken: token });
+```
+
+The proof is **not** domain-locked, so a Mini App on any origin can authenticate
+against a Tegro-issued payload. The session lasts **48h** (auto-refreshes past
+half-life; `auth.refreshToken()` to extend). The challenge payload is valid for
+20 min and the proof timestamp window is 5 min.
+
+**Cross-origin note.** The session is a cookie named `tegro-dex`, scoped to
+`tegro.finance` and currently `SameSite=Lax`, and `tegro.finance`'s CORS allow-list
+does not include third-party origins. So a browser dApp on **another domain**
+cannot call the authenticated endpoints directly — run them from **your server**
+with `{ sessionToken }` (a browser can't set the cookie header cross-origin), or
+ask Tegro to allow-list your origin and set `SameSite=None; Secure`.
+Runnable: [`examples/auth.ts`](examples/auth.ts) (`npm run example:auth`).
 
 ---
 

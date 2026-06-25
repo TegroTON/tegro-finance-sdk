@@ -8,7 +8,7 @@
 //
 // Two differences from the DEX client, both deliberate:
 //   1. Builder endpoints (stake/unstake/claim) and `getWithdrawals` are
-//      AUTHENTICATED with a session cookie named `token`, obtained by the
+//      AUTHENTICATED with a session cookie named `tegro-dex`, obtained by the
 //      integrator authenticating the wallet via TON Connect. In a browser dApp
 //      the cookie travels automatically (`credentials: "include"`); on a server
 //      pass it explicitly via `sessionToken`.
@@ -31,6 +31,8 @@ export type CredentialsMode = "omit" | "same-origin" | "include";
 const DEFAULT_API_BASE = "https://tegro.finance";
 const API_PREFIX = "/api/v1";
 const STAKING_PREFIX = "/liquid-staking";
+/** Session cookie name the production backend reads (jwt.py `TOKEN_KEY`). */
+const DEFAULT_COOKIE_NAME = "tegro-dex";
 
 /**
  * Hard ceiling on the *gas* a builder may attach on top of the staked amount,
@@ -65,6 +67,24 @@ function sameAccount(a: string, b: string): boolean {
   }
 }
 
+/**
+ * Validate a cookie name as an RFC 6265 token so it can't smuggle cookie syntax.
+ * Exported for reuse by the auth client; not part of the public package surface.
+ */
+export function assertCookieName(name: string): void {
+  // token = 1*<any CHAR except CTLs or separators>. Reject empty / illegal chars.
+  if (!name) throw new Error("tegro_finance_staking: cookieName must be non-empty");
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    const ok =
+      (c >= 0x30 && c <= 0x39) || // 0-9
+      (c >= 0x41 && c <= 0x5a) || // A-Z
+      (c >= 0x61 && c <= 0x7a) || // a-z
+      "!#$%&'*+-.^_`|~".indexOf(name[i]) !== -1;
+    if (!ok) throw new Error(`tegro_finance_staking: illegal character in cookieName: ${name}`);
+  }
+}
+
 /** True if `s` parses as a TON address in any friendly/raw form. */
 function isAddress(s: string): boolean {
   try {
@@ -78,9 +98,10 @@ function isAddress(s: string): boolean {
 /**
  * Guard a session token before it goes into a `Cookie` header. Rejects an
  * `https`-less origin and any control/delimiter character (`;`, CR, LF, etc.)
- * that could split the header. Returns the token unchanged when safe.
+ * that could split the header. Exported for reuse by the auth client; not part
+ * of the public package surface.
  */
-function assertUsableToken(token: string, apiBase: string): void {
+export function assertUsableToken(token: string, apiBase: string): void {
   // Scheme is case-insensitive (`HTTP://` ≡ `http://`); require https explicitly
   // so a plaintext or scheme-less base can never carry the token.
   if (!apiBase.toLowerCase().startsWith("https://")) {
@@ -177,7 +198,7 @@ export interface TegroFinanceStakingClientOptions {
    */
   apiBase?: string;
   /**
-   * Session token for the `token` cookie, for server-side (non-browser) calls
+   * Session token for the `tegro-dex` cookie, for server-side (non-browser) calls
    * to the authenticated endpoints. In a browser dApp leave this unset and rely
    * on the cookie set during TON Connect auth. Can be updated later with
    * {@link TegroFinanceStakingClient.setSessionToken}.
@@ -185,9 +206,15 @@ export interface TegroFinanceStakingClientOptions {
   sessionToken?: string;
   /**
    * Fetch credentials mode. Default `"include"` so the browser sends the
-   * `token` cookie to the (same-origin) API. Harmless on the server.
+   * session cookie to the (same-origin) API. Harmless on the server.
    */
   credentials?: CredentialsMode;
+  /**
+   * Name of the session cookie the backend reads. Default `"tegro-dex"` (the
+   * production value). Only override if you front the API with a proxy that
+   * renames it.
+   */
+  cookieName?: string;
   /** Inject a custom fetch (tests, proxies, retry wrappers). */
   fetch?: typeof fetch;
   /** Per-request timeout in ms. Default 15000. Set 0 to disable. */
@@ -218,6 +245,7 @@ export class TegroFinanceStakingValidationError extends Error {
 export class TegroFinanceStakingClient {
   private readonly apiBase: string;
   private readonly credentials: CredentialsMode;
+  private readonly cookieName: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private sessionToken: string | undefined;
@@ -226,6 +254,8 @@ export class TegroFinanceStakingClient {
     this.apiBase = stripTrailingSlashes(opts.apiBase ?? DEFAULT_API_BASE);
     this.sessionToken = opts.sessionToken;
     this.credentials = opts.credentials ?? "include";
+    this.cookieName = opts.cookieName ?? DEFAULT_COOKIE_NAME;
+    assertCookieName(this.cookieName);
     this.timeoutMs = opts.timeoutMs ?? 15_000;
     this.fetchImpl = opts.fetch ?? fetch;
     // The session token is a bearer-equivalent credential put in a Cookie header
@@ -433,7 +463,7 @@ export class TegroFinanceStakingClient {
     if (body) headers["Content-Type"] = "application/json";
     // Server-side cookie auth: a browser silently ignores a manual Cookie header
     // and sends the real cookie via `credentials: "include"` instead.
-    if (auth && this.sessionToken) headers["Cookie"] = `token=${this.sessionToken}`;
+    if (auth && this.sessionToken) headers["Cookie"] = `${this.cookieName}=${this.sessionToken}`;
 
     let res: Response;
     try {

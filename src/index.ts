@@ -67,6 +67,20 @@ export type {
   BuildClaimParams,
 } from "./staking.js";
 
+// TON Connect auth: turn a wallet's signed ton_proof into a staking session.
+export {
+  TegroFinanceAuthClient,
+  TegroFinanceProofError,
+  tonProofToLoginRequest,
+} from "./auth.js";
+export type {
+  TegroFinanceAuthClientOptions,
+  AuthProof,
+  AuthLoginRequest,
+  TokenResponse,
+  TonProofWallet,
+} from "./auth.js";
+
 export { TON_NATIVE_ADDRESS, DexErrorCode } from "./types.js";
 export type {
   UnitsInput,
