@@ -84,7 +84,7 @@ describe("TegroFinanceStakingClient build (auth)", () => {
     expect(tx.messages[0].to).toBe(MASTER);
     expect(captured).toContain('"offer_amount":5000000000');
     expect(captured).not.toContain('"5000000000"');
-    expect(cookie).toBe("token=sess-abc");
+    expect(cookie).toBe("tegro-dex=sess-abc");
     expect(credentials).toBe("include");
   });
 
@@ -126,7 +126,7 @@ describe("TegroFinanceStakingClient build (auth)", () => {
     });
     c.setSessionToken("fresh");
     await c.getWithdrawals(MASTER);
-    expect(cookie).toBe("token=fresh");
+    expect(cookie).toBe("tegro-dex=fresh");
   });
 });
 

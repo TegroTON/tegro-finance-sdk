@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 — 2026-06-25
+
+TON Connect authentication + a session-cookie fix. Verified against the
+production backend.
+
+- **`TegroFinanceAuthClient`** — opens a staking session from a TON Connect
+  `ton_proof`: `getPayload()` (challenge), `login(req)` → `{ token }`,
+  `refreshToken()`. Plus `tonProofToLoginRequest(wallet, { affiliateAddress?,
+  tgInitData? })` to map a connected wallet's signed proof into the login body.
+  Endpoints under `/api/v1/auth/`; the proof is **not** domain-locked, so a
+  Mini App on any origin can authenticate against a Tegro-issued payload.
+- **Fix (session cookie name)**: the backend reads the session cookie as
+  **`tegro-dex`**, not `token`. `TegroFinanceStakingClient` now sends that name
+  (configurable via `cookieName`). The server-side `sessionToken` path in 0.3.0
+  used the wrong name and would not authenticate — upgrade to 0.4.0 for it.
+- Login body fields corrected to the backend contract: `affiliate_address` /
+  `tg_init_data` (were mis-named after a stale frontend reference).
+- `examples/auth.ts`. Token TTL is 48h (auto-refreshes past half-life); the
+  challenge payload TTL is 20 min and the proof timestamp window is 5 min.
+
 ## 0.3.0 — 2026-06-24
 
 Liquid staking (stgTON) — stake/unstake/claim, additive and non-breaking.
