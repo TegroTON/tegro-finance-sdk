@@ -392,6 +392,7 @@ The suite (40 tests) covers amount math (round-trips, truncation rejection, unsa
 
 ## See also
 
+- [`@tegroton/tegro-finance-mcp`](https://github.com/TegroTON/tegro-finance-mcp) — **MCP server** built on this SDK: gives Claude, Cursor, ChatGPT and any AI assistant read-only access to Tegro Finance pools, prices, swap quotes and stgTON staking.
 - [Tegro Finance docs](https://docs.tegro.finance) — concepts, contracts, fees, API reference.
 - [TON Connect](https://docs.ton.org/develop/dapps/ton-connect/overview) — the wallet-authorization protocol used to sign.
 - [TON developer docs](https://docs.ton.org) — The Open Network platform reference.
